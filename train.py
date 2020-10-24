@@ -77,36 +77,17 @@ class Model(tf.keras.Model):
 class Trainer(models.BaseTrainer):
 
   def build(self, _):
+    ds_paths = gfile.Glob(
+        os.path.join(constants.DS_PATH, 'all_tfrecord/all.tfrecord-*'))
     ds = (
-        tf.data.TFRecordDataset(
-            gfile.Glob(
-                os.path.join(
-                    constants.DS_PATH, 'all_tfrecord/all.tfrecord-*'))).map(
-                        lambda x: parse_ds(x, self.config.img_size)).filter(
-                            lambda _, _2, level: level != -1).repeat())
+        tf.data.TFRecordDataset(ds_paths).map(
+            lambda x: parse_ds(x, self.config.img_size)).filter(
+                lambda _, _2, level: level != -1).repeat())
     self.ds_train = ds.filter(lambda image, _, _2: is_train(image)).batch(
         self.config.train_batch_size).prefetch(2)
     self.ds_val = ds.filter(lambda image, _, _2: not is_train(image)).batch(
         self.config.val_batch_size).prefetch(2)
-    if self.config.architecture == 'basic':
-      self.model = Model(self.config)
-    elif self.config.architecture == 'resnet50':
-      self.model = tf.keras.Sequential([
-          hub.KerasLayer(
-              'https://tfhub.dev/tensorflow/resnet_50/feature_vector/1',
-              trainable=self.config.finetune),
-          tf.keras.layers.Dense(5),
-      ])
-    elif self.config.architecture == 'resnet50_empty':
-      input_shape = (self.config.img_size, self.config.img_size, 3)
-      inputs = tf.keras.Input(shape=input_shape)
-      outputs = tf.keras.applications.ResNet50(
-          weights=None, input_shape=input_shape, classes=5)(
-              inputs)
-      self.model = tf.keras.Model(inputs, outputs)
-    else:
-      assert False
-
+    self.model = self.get_model()
     self.optimizer = tf.keras.optimizers.Adam(0.001)
     self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(
         from_logits=True)
@@ -115,6 +96,39 @@ class Trainer(models.BaseTrainer):
         model=self.model,
         optimizer=self.optimizer,
         total_steps=self.total_steps)
+
+  def get_model(self) -> tf.keras.Model:
+    if self.config.architecture == 'linear':
+      return tf.keras.Sequential([
+          tf.keras.layers.Flatten(),
+          tf.keras.layers.Dense(5),
+      ])
+    if self.config.architecture == 'basic':
+      return Model(self.config)
+    elif self.config.architecture == 'resnet50':
+      return tf.keras.Sequential([
+          hub.KerasLayer(
+              'https://tfhub.dev/tensorflow/resnet_50/feature_vector/1',
+              trainable=self.config.finetune),
+          tf.keras.layers.Dense(5),
+      ])
+    elif self.config.architecture == 'resnet50_2dis':
+      return tf.keras.Sequential([
+          hub.KerasLayer(
+              'https://tfhub.dev/tensorflow/resnet_50/feature_vector/1',
+              trainable=self.config.finetune),
+          tf.keras.layers.Dense(1024, activation='relu'),
+          tf.keras.layers.Dense(5),
+      ])
+    elif self.config.architecture == 'resnet50_empty':
+      input_shape = (self.config.img_size, self.config.img_size, 3)
+      inputs = tf.keras.Input(shape=input_shape)
+      outputs = tf.keras.applications.ResNet50(
+          weights=None, input_shape=input_shape, classes=5)(
+              inputs)
+      return tf.keras.Model(inputs, outputs)
+    else:
+      assert False
 
   def train_step(self, batch):
     _, content, level = batch
